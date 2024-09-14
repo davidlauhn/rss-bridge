@@ -1,366 +1,268 @@
 <?php
-/**
- * This file is part of RSS-Bridge, a PHP project capable of generating RSS and
- * Atom feeds for websites that don't have one.
- *
- * For the full license information, please view the UNLICENSE file distributed
- * with this source code.
- *
- * @package	Core
- * @license	http://unlicense.org/ UNLICENSE
- * @link	https://github.com/rss-bridge/rss-bridge
- */
 
-/**
- * A generator class for a single bridge card on the home page of RSS-Bridge.
- *
- * This class generates the HTML content for a single bridge card for the home
- * page of RSS-Bridge.
- *
- * @todo Return error if a caller creates an object of this class.
- */
-final class BridgeCard {
-	/**
-	 * Get the form header for a bridge card
-	 *
-	 * @param string $bridgeName The bridge name
-	 * @param bool $isHttps If disabled, adds a warning to the form
-	 * @return string The form header
-	 */
-	private static function getFormHeader($bridgeName, $isHttps = false, $parameterName = '') {
-		$form = <<<EOD
-			<form method="GET" action="?">
-				<input type="hidden" name="action" value="display" />
-				<input type="hidden" name="bridge" value="{$bridgeName}" />
-EOD;
+final class BridgeCard
+{
+    public static function render(
+        BridgeFactory $bridgeFactory,
+        string $bridgeClassName,
+        ?string $token
+    ): string {
+        $bridge = $bridgeFactory->create($bridgeClassName);
 
-		if(!empty($parameterName)) {
-			$form .= <<<EOD
-				<input type="hidden" name="context" value="{$parameterName}" />
-EOD;
-		}
+        $uri = $bridge->getURI();
+        $name = $bridge->getName();
+        $icon = $bridge->getIcon();
+        $description = $bridge->getDescription();
+        $contexts = $bridge->getParameters();
 
-		if(!$isHttps) {
-			$form .= '<div class="secure-warning">Warning :
-This bridge is not fetching its content through a secure connection</div>';
-		}
+        // Checkbox for disabling of proxy (if enabled)
+        if (
+            Configuration::getConfig('proxy', 'url')
+            && Configuration::getConfig('proxy', 'by_bridge')
+        ) {
+            $proxyName = Configuration::getConfig('proxy', 'name') ?: Configuration::getConfig('proxy', 'url');
+            $contexts['global']['_noproxy'] = [
+                'name' => sprintf('Disable proxy (%s)', $proxyName),
+                'type' => 'checkbox',
+            ];
+        }
 
-		return $form;
-	}
+        if (Configuration::getConfig('cache', 'custom_timeout')) {
+            $contexts['global']['_cache_timeout'] = [
+                'name' => 'Cache timeout in seconds',
+                'type' => 'number',
+                'defaultValue' => $bridge->getCacheTimeout()
+            ];
+        }
 
-	/**
-	 * Get the form body for a bridge
-	 *
-	 * @param string $bridgeName The bridge name
-	 * @param array $formats A list of supported formats
-	 * @param bool $isActive Indicates if a bridge is enabled or not
-	 * @param bool $isHttps Indicates if a bridge uses HTTPS or not
-	 * @param string $parameterName Sets the bridge context for the current form
-	 * @param array $parameters The bridge parameters
-	 * @return string The form body
-	 */
-	private static function getForm($bridgeName,
-	$formats,
-	$isActive = false,
-	$isHttps = false,
-	$parameterName = '',
-	$parameters = array()) {
-		$form = self::getFormHeader($bridgeName, $isHttps, $parameterName);
+        $shortName = $bridge->getShortName();
+        $card = <<<CARD
+            <section
+                class="bridge-card"
+                id="bridge-{$bridgeClassName}"
+                data-ref="{$name}"
+                data-short-name="$shortName"
+            >
 
-		if(count($parameters) > 0) {
+            <h2><a href="{$uri}">{$name}</a></h2>
+            <p class="description">{$description}</p>
 
-			$form .= '<div class="parameters">';
+            <input type="checkbox" class="showmore-box" id="showmore-{$bridgeClassName}" />
+            <label class="showmore" for="showmore-{$bridgeClassName}">Show more</label>
 
-			foreach($parameters as $id => $inputEntry) {
-				if(!isset($inputEntry['exampleValue']))
-					$inputEntry['exampleValue'] = '';
 
-				if(!isset($inputEntry['defaultValue']))
-					$inputEntry['defaultValue'] = '';
+        CARD;
 
-				$idArg = 'arg-'
-					. urlencode($bridgeName)
-					. '-'
-					. urlencode($parameterName)
-					. '-'
-					. urlencode($id);
+        if (count($contexts) === 0) {
+            // The bridge has zero parameters
+            $card .= self::renderForm($bridgeClassName, '', [], $token);
+        } elseif (count($contexts) === 1 && array_key_exists('global', $contexts)) {
+            // The bridge has a single context with key 'global'
+            $card .= self::renderForm($bridgeClassName, '', $contexts['global'], $token);
+        } else {
+            // The bridge has one or more contexts (named or unnamed)
+            foreach ($contexts as $contextName => $contextParameters) {
+                if ($contextName === 'global') {
+                    continue;
+                }
 
-				$form .= '<label for="'
-					. $idArg
-					. '">'
-					. filter_var($inputEntry['name'], FILTER_SANITIZE_STRING)
-					. '</label>'
-					. PHP_EOL;
+                if (array_key_exists('global', $contexts)) {
+                    // Merge the global parameters into current context
+                    $contextParameters = array_merge($contextParameters, $contexts['global']);
+                }
 
-				if(!isset($inputEntry['type']) || $inputEntry['type'] === 'text') {
-					$form .= self::getTextInput($inputEntry, $idArg, $id);
-				} elseif($inputEntry['type'] === 'number') {
-					$form .= self::getNumberInput($inputEntry, $idArg, $id);
-				} else if($inputEntry['type'] === 'list') {
-					$form .= self::getListInput($inputEntry, $idArg, $id);
-				} elseif($inputEntry['type'] === 'checkbox') {
-					$form .= self::getCheckboxInput($inputEntry, $idArg, $id);
-				}
+                if (!is_numeric($contextName)) {
+                    // This is a named context
+                    $card .= '<h5>' . $contextName . '</h5>' . PHP_EOL;
+                }
 
-				if(isset($inputEntry['title']))
-					$form .= '<i class="info" title="' . filter_var($inputEntry['title'], FILTER_SANITIZE_STRING) . '">i</i>';
-				else
-					$form .= '<i class="no-info"></i>';
-			}
+                $card .= self::renderForm($bridgeClassName, $contextName, $contextParameters, $token);
+            }
+        }
 
-			$form .= '</div>';
+        $card .= sprintf('<label class="showless" for="showmore-%s">Show less</label>', $bridgeClassName);
 
-		}
+        if (Configuration::getConfig('admin', 'donations') && $bridge->getDonationURI()) {
+            $card .= sprintf(
+                '<p class="maintainer">%s ~ <a href="%s">Donate</a></p>',
+                $bridge->getMaintainer(),
+                $bridge->getDonationURI()
+            );
+        } else {
+            $card .= sprintf('<p class="maintainer">%s</p>', $bridge->getMaintainer());
+        }
+        $card .= '</section>';
 
-		if($isActive) {
-			$form .= '<button type="submit" name="format" value="Html">Generate feed</button>';
-		} else {
-			$form .= '<span style="font-weight: bold;">Inactive</span>';
-		}
+        return $card;
+    }
 
-		return $form . '</form>' . PHP_EOL;
-	}
+    private static function renderForm(
+        string $bridgeClassName,
+        string $contextName,
+        array $contextParameters,
+        ?string $token
+    ) {
+        $form = <<<EOD
+        <form method="GET" action="?" class="bridge-form">
+            <input type="hidden" name="action" value="display" />
+            <input type="hidden" name="bridge" value="{$bridgeClassName}" />
+        EOD;
 
-	/**
-	 * Get input field attributes
-	 *
-	 * @param array $entry The current entry
-	 * @return string The input field attributes
-	 */
-	private static function getInputAttributes($entry) {
-		$retVal = '';
+        if (Configuration::getConfig('authentication', 'token') && $token) {
+            $form .= sprintf('<input type="hidden" name="token" value="%s" />', e($token));
+        }
 
-		if(isset($entry['required']) && $entry['required'] === true)
-			$retVal .= ' required';
+        if (!empty($contextName)) {
+            $form .= sprintf('<input type="hidden" name="context" value="%s" />', $contextName);
+        }
 
-		if(isset($entry['pattern']))
-			$retVal .= ' pattern="' . $entry['pattern'] . '"';
+        if (count($contextParameters) > 0) {
+            $form .= '<div class="parameters">';
 
-		return $retVal;
-	}
+            foreach ($contextParameters as $id => $inputEntry) {
+                if (!isset($inputEntry['exampleValue'])) {
+                    $inputEntry['exampleValue'] = '';
+                }
 
-	/**
-	 * Get text input
-	 *
-	 * @param array $entry The current entry
-	 * @param string $id The field ID
-	 * @param string $name The field name
-	 * @return string The text input field
-	 */
-	private static function getTextInput($entry, $id, $name) {
-		return '<input '
-		. self::getInputAttributes($entry)
-		. ' id="'
-		. $id
-		. '" type="text" value="'
-		. filter_var($entry['defaultValue'], FILTER_SANITIZE_STRING)
-		. '" placeholder="'
-		. filter_var($entry['exampleValue'], FILTER_SANITIZE_STRING)
-		. '" name="'
-		. $name
-		. '" />'
-		. PHP_EOL;
-	}
+                if (!isset($inputEntry['defaultValue'])) {
+                    $inputEntry['defaultValue'] = '';
+                }
 
-	/**
-	 * Get number input
-	 *
-	 * @param array $entry The current entry
-	 * @param string $id The field ID
-	 * @param string $name The field name
-	 * @return string The number input field
-	 */
-	private static function getNumberInput($entry, $id, $name) {
-		return '<input '
-		. self::getInputAttributes($entry)
-		. ' id="'
-		. $id
-		. '" type="number" value="'
-		. filter_var($entry['defaultValue'], FILTER_SANITIZE_NUMBER_INT)
-		. '" placeholder="'
-		. filter_var($entry['exampleValue'], FILTER_SANITIZE_NUMBER_INT)
-		. '" name="'
-		. $name
-		. '" />'
-		. PHP_EOL;
-	}
+                $idArg = 'arg-' . urlencode($bridgeClassName) . '-' . urlencode($contextName) . '-' . urlencode($id);
 
-	/**
-	 * Get list input
-	 *
-	 * @param array $entry The current entry
-	 * @param string $id The field ID
-	 * @param string $name The field name
-	 * @return string The list input field
-	 */
-	private static function getListInput($entry, $id, $name) {
-		if(isset($entry['required']) && $entry['required'] === true) {
-			Debug::log('The "required" attribute is not supported for lists.');
-			unset($entry['required']);
-		}
+                $inputName = filter_var($inputEntry['name'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+                $form .= '<label for="' . $idArg . '">' . $inputName . '</label>' . PHP_EOL;
 
-		$list = '<select '
-		. self::getInputAttributes($entry)
-		. ' id="'
-		. $id
-		. '" name="'
-		. $name
-		. '" >';
+                if (
+                    !isset($inputEntry['type'])
+                    || $inputEntry['type'] === 'text'
+                ) {
+                    $form .= self::getTextInput($inputEntry, $idArg, $id) . "\n";
+                } elseif ($inputEntry['type'] === 'number') {
+                    $form .= self::getNumberInput($inputEntry, $idArg, $id);
+                } elseif ($inputEntry['type'] === 'list') {
+                    $form .= self::getListInput($inputEntry, $idArg, $id) . "\n";
+                } elseif ($inputEntry['type'] === 'checkbox') {
+                    $form .= self::getCheckboxInput($inputEntry, $idArg, $id);
+                } else {
+                    $foo = 2;
+                    // oops?
+                }
 
-		foreach($entry['values'] as $name => $value) {
-			if(is_array($value)) {
-				$list .= '<optgroup label="' . htmlentities($name) . '">';
-				foreach($value as $subname => $subvalue) {
-					if($entry['defaultValue'] === $subname
-						|| $entry['defaultValue'] === $subvalue) {
-						$list .= '<option value="'
-							. $subvalue
-							. '" selected>'
-							. $subname
-							. '</option>';
-					} else {
-						$list .= '<option value="'
-							. $subvalue
-							. '">'
-							. $subname
-							. '</option>';
-					}
-				}
-				$list .= '</optgroup>';
-			} else {
-				if($entry['defaultValue'] === $name
-					|| $entry['defaultValue'] === $value) {
-					$list .= '<option value="'
-						. $value
-						. '" selected>'
-						. $name
-						. '</option>';
-				} else {
-					$list .= '<option value="'
-						. $value
-						. '">'
-						. $name
-						. '</option>';
-				}
-			}
-		}
+                $infoText = [];
+                $infoTextScript = '';
+                if (isset($inputEntry['title'])) {
+                    $infoText[] = filter_var($inputEntry['title'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+                }
+                if ($inputEntry['exampleValue'] !== '') {
+                    $infoText[] = "Example (right click to use):\n" . filter_var($inputEntry['exampleValue'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+                    $infoTextScript = 'rssbridge_use_placeholder_value(this);';
+                }
 
-		$list .= '</select>';
+                if (count($infoText) > 0) {
+                    $form .= '<i class="info" data-for="' . $idArg . '" title="' . implode("\n\n", $infoText) . '" oncontextmenu="' . $infoTextScript . 'return false">i</i>';
+                } else {
+                    $form .= '<i class="no-info"></i>';
+                }
+            }
 
-		return $list;
-	}
+            $form .= '</div>';
+        }
 
-	/**
-	 * Get checkbox input
-	 *
-	 * @param array $entry The current entry
-	 * @param string $id The field ID
-	 * @param string $name The field name
-	 * @return string The checkbox input field
-	 */
-	private static function getCheckboxInput($entry, $id, $name) {
-		if(isset($entry['required']) && $entry['required'] === true) {
-			Debug::log('The "required" attribute is not supported for checkboxes.');
-			unset($entry['required']);
-		}
+        $form .= '<button type="submit" name="format" formtarget="_blank" value="Html">Generate feed</button>';
 
-		return '<input '
-		. self::getInputAttributes($entry)
-		. ' id="'
-		. $id
-		. '" type="checkbox" name="'
-		. $name
-		. '" '
-		. ($entry['defaultValue'] === 'checked' ? 'checked' : '')
-		. ' />'
-		. PHP_EOL;
-	}
+        return $form . '</form>' . PHP_EOL;
+    }
 
-	/**
-	 * Gets a single bridge card
-	 *
-	 * @param string $bridgeName The bridge name
-	 * @param array $formats A list of formats
-	 * @param bool $isActive Indicates if the bridge is active or not
-	 * @return string The bridge card
-	 */
-	static function displayBridgeCard($bridgeName, $formats, $isActive = true){
+    public static function getTextInput(array $entry, string $id, string $name): string
+    {
+        $defaultValue = filter_var($entry['defaultValue'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+        $exampleValue = filter_var($entry['exampleValue'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+        $attributes = self::getInputAttributes($entry);
 
-		$bridgeFac = new \BridgeFactory();
-		$bridgeFac->setWorkingDir(PATH_LIB_BRIDGES);
+        return sprintf('<input %s id="%s" type="text" value="%s" placeholder="%s" name="%s" />', $attributes, $id, $defaultValue, $exampleValue, $name);
+    }
 
-		$bridge = $bridgeFac->create($bridgeName);
+    public static function getNumberInput(array $entry, string $id, string $name): string
+    {
+        $defaultValue = filter_var($entry['defaultValue'], FILTER_SANITIZE_NUMBER_INT);
+        $exampleValue = filter_var($entry['exampleValue'], FILTER_SANITIZE_NUMBER_INT);
+        $attributes = self::getInputAttributes($entry);
 
-		if($bridge == false)
-			return '';
+        return sprintf('<input %s id="%s" type="number" value="%s" placeholder="%s" name="%s" />' . "\n", $attributes, $id, $defaultValue, $exampleValue, $name);
+    }
 
-		$isHttps = strpos($bridge->getURI(), 'https') === 0;
+    public static function getListInput(array $entry, string $id, string $name): string
+    {
+        $required = $entry['required'] ?? null;
+        if ($required) {
+            trigger_error('The required attribute is not supported for lists');
+            unset($entry['required']);
+        }
 
-		$uri = $bridge->getURI();
-		$name = $bridge->getName();
-		$icon = $bridge->getIcon();
-		$description = $bridge->getDescription();
-		$parameters = $bridge->getParameters();
-		$donationUri = $bridge->getDonationURI();
-		$maintainer = $bridge->getMaintainer();
+        $attributes = self::getInputAttributes($entry);
+        $list = sprintf('<select %s id="%s" name="%s" >' . "\n", $attributes, $id, $name);
 
-		$donationsAllowed = Configuration::getConfig('admin', 'donations');
+        foreach ($entry['values'] as $name => $value) {
+            if (is_array($value)) {
+                $list .= '<optgroup label="' . htmlentities($name) . '">';
+                foreach ($value as $subname => $subvalue) {
+                    if (
+                        $entry['defaultValue'] === $subname
+                        || $entry['defaultValue'] === $subvalue
+                    ) {
+                        $list .= '<option value="' . $subvalue . '" selected>' . $subname . '</option>';
+                    } else {
+                        $list .= '<option value="' . $subvalue . '">' . $subname . '</option>';
+                    }
+                }
+                $list .= '</optgroup>';
+            } else {
+                if (
+                    $entry['defaultValue'] === $name
+                    || $entry['defaultValue'] === $value
+                ) {
+                    $list .= '<option value="' . $value . '" selected>' . $name . '</option>' . "\n";
+                } else {
+                    $list .= '<option value="' . $value . '">' . $name . '</option>' . "\n";
+                }
+            }
+        }
 
-		if(defined('PROXY_URL') && PROXY_BYBRIDGE) {
-			$parameters['global']['_noproxy'] = array(
-				'name' => 'Disable proxy (' . ((defined('PROXY_NAME') && PROXY_NAME) ? PROXY_NAME : PROXY_URL) . ')',
-				'type' => 'checkbox'
-			);
-		}
+        $list .= '</select>';
 
-		if(CUSTOM_CACHE_TIMEOUT) {
-			$parameters['global']['_cache_timeout'] = array(
-				'name' => 'Cache timeout in seconds',
-				'type' => 'number',
-				'defaultValue' => $bridge->getCacheTimeout()
-			);
-		}
+        return $list;
+    }
 
-		$card = <<<CARD
-			<section id="bridge-{$bridgeName}" data-ref="{$bridgeName}">
-				<h2><a href="{$uri}">{$name}</a></h2>
-				<p class="description">{$description}</p>
-				<input type="checkbox" class="showmore-box" id="showmore-{$bridgeName}" />
-				<label class="showmore" for="showmore-{$bridgeName}">Show more</label>
-CARD;
 
-		// If we don't have any parameter for the bridge, we print a generic form to load it.
-		if (count($parameters) === 0) {
-			$card .= self::getForm($bridgeName, $formats, $isActive, $isHttps);
+    public static function getCheckboxInput(array $entry, string $id, string $name): string
+    {
+        $required = $entry['required'] ?? null;
+        if ($required) {
+            trigger_error('The required attribute is not supported for checkboxes');
+            unset($entry['required']);
+        }
 
-		// Display form with cache timeout and/or noproxy options (if enabled) when bridge has no parameters
-		} else if (count($parameters) === 1 && array_key_exists('global', $parameters)) {
-			$card .= self::getForm($bridgeName, $formats, $isActive, $isHttps, '', $parameters['global']);
-		} else {
+        $checked = $entry['defaultValue'] === 'checked' ? 'checked' : '';
+        $attributes = self::getInputAttributes($entry);
 
-			foreach($parameters as $parameterName => $parameter) {
-				if(!is_numeric($parameterName) && $parameterName === 'global')
-					continue;
+        return sprintf('<input %s id="%s" type="checkbox" name="%s" %s />' . "\n", $attributes, $id, $name, $checked);
+    }
 
-				if(array_key_exists('global', $parameters))
-					$parameter = array_merge($parameter, $parameters['global']);
+    public static function getInputAttributes(array $entry): string
+    {
+        $result = '';
 
-				if(!is_numeric($parameterName))
-					$card .= '<h5>' . $parameterName . '</h5>' . PHP_EOL;
+        $required = $entry['required'] ?? null;
+        if ($required) {
+            $result .= ' required';
+        }
 
-				$card .= self::getForm($bridgeName, $formats, $isActive, $isHttps, $parameterName, $parameter);
-			}
+        $pattern = $entry['pattern'] ?? null;
+        if ($pattern) {
+            $result .= ' pattern="' . $pattern . '"';
+        }
 
-		}
-
-		$card .= '<label class="showless" for="showmore-' . $bridgeName . '">Show less</label>';
-		if($donationUri !== '' && $donationsAllowed) {
-			$card .= '<p class="maintainer">' . $maintainer . ' ~ <a href="' . $donationUri . '">Donate</a></p>';
-		} else {
-			$card .= '<p class="maintainer">' . $maintainer . '</p>';
-		}
-		$card .= '</section>';
-
-		return $card;
-	}
+        return $result;
+    }
 }
